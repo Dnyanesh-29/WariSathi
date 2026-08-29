@@ -644,42 +644,73 @@ export const MapTab = () => {
           handleIndicatorStyle={{ backgroundColor: Colors.textSecondary }}
         >
           <View style={styles.sheetContent}>
-            <Text style={[Typography.headingMedium, { marginBottom: 12, fontSize: 18 }]}>
-              {isMr ? 'जवळचे ठिकाणे' : 'Nearby POIs'}
-              {userLat != null && (
-                <Text style={[Typography.bodySmall, { fontWeight: 'normal' }]}>
-                  {isMr ? ' (अंतरानुसार)' : ' (sorted by distance)'}
+            {activeFilter === 'events' ? (
+              <>
+                <Text style={[Typography.headingMedium, { marginBottom: 12, fontSize: 18 }]}>
+                  {isMr ? '📅 कार्यक्रम' : '📅 Wari Events 2026'}
                 </Text>
-              )}
-            </Text>
-            <BottomSheetScrollView>
-              {sortedPOIs.map((poi) => {
-                const dist =
-                  userLat != null && userLng != null
-                    ? getDistanceKm(userLat, userLng, poi.lat, poi.lng).toFixed(1)
-                    : null;
-                return (
-                  <TouchableOpacity
-                    key={poi.id}
-                    style={styles.poiRow}
-                    onPress={() => flyTo(poi.lng, poi.lat)}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={Typography.bodyLarge}>{poi.name}</Text>
-                      <Text style={Typography.bodySmall}>
-                        {isMr
-                          ? (({ water: 'पाणी', medical: 'वैद्यकीय', toilet: 'शौचालय', shelter: 'निवारा' } as any)[poi.type] ?? poi.type.toUpperCase())
-                          : poi.type.toUpperCase()
-                        }{dist != null ? (isMr ? ` · ${dist} किमी दूर` : ` · ${dist} km away`) : ''}
-                      </Text>
-                    </View>
-                    <View style={styles.goButton}>
-                      <Text style={{ color: Colors.surface, fontWeight: 'bold', fontSize: 12 }}>{isMr ? 'जा →' : 'GO →'}</Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </BottomSheetScrollView>
+                <BottomSheetScrollView>
+                  {events.map((ev) => (
+                    <TouchableOpacity
+                      key={ev.id}
+                      style={styles.poiRow}
+                      onPress={() => flyTo(ev.lng, ev.lat)}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={Typography.bodyLarge}>{ev.name}</Text>
+                        <Text style={[Typography.bodySmall, { color: Colors.textSecondary, marginTop: 2 }]}>
+                          {ev.description}
+                        </Text>
+                      </View>
+                      <View style={styles.goButton}>
+                        <Text style={{ color: Colors.surface, fontWeight: 'bold', fontSize: 12 }}>
+                          {isMr ? 'जा →' : 'GO →'}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </BottomSheetScrollView>
+              </>
+            ) : (
+              <>
+                <Text style={[Typography.headingMedium, { marginBottom: 12, fontSize: 18 }]}>
+                  {isMr ? 'जवळचे ठिकाणे' : 'Nearby POIs'}
+                  {userLat != null && (
+                    <Text style={[Typography.bodySmall, { fontWeight: 'normal' }]}>
+                      {isMr ? ' (अंतरानुसार)' : ' (sorted by distance)'}
+                    </Text>
+                  )}
+                </Text>
+                <BottomSheetScrollView>
+                  {sortedPOIs.map((poi) => {
+                    const dist =
+                      userLat != null && userLng != null
+                        ? getDistanceKm(userLat, userLng, poi.lat, poi.lng).toFixed(1)
+                        : null;
+                    return (
+                      <TouchableOpacity
+                        key={poi.id}
+                        style={styles.poiRow}
+                        onPress={() => flyTo(poi.lng, poi.lat)}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={Typography.bodyLarge}>{poi.name}</Text>
+                          <Text style={Typography.bodySmall}>
+                            {isMr
+                              ? (({ water: 'पाणी', medical: 'वैद्यकीय', toilet: 'शौचालय', shelter: 'निवारा' } as any)[poi.type] ?? poi.type.toUpperCase())
+                              : poi.type.toUpperCase()
+                            }{dist != null ? (isMr ? ` · ${dist} किमी दूर` : ` · ${dist} km away`) : ''}
+                          </Text>
+                        </View>
+                        <View style={styles.goButton}>
+                          <Text style={{ color: Colors.surface, fontWeight: 'bold', fontSize: 12 }}>{isMr ? 'जा →' : 'GO →'}</Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </BottomSheetScrollView>
+              </>
+            )}
           </View>
         </BottomSheet>
       ) : null}
