@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "586883358397",
+    "project_id": "warisathi-4303b",
+    "storage_bucket": "warisathi-4303b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:586883358397:android:00fbfe3cc02d1e2b29a1d4",
+        "android_client_info": {
+          "package_name": "com.pikachu29.warisathi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCUe-dKNDsr1TLOcJ-Cdt4zTE61KrxfHWA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
