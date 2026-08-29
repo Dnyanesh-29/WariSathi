@@ -368,7 +368,7 @@ const GroupTabInner = () => {
   // ── Actions ───────────────────────────────────────────────────────────────────
   const createGroup = async () => {
     if (!db) {
-      Alert.alert('Error', 'Firebase unavailable. Use the native dev build APK.');
+      Alert.alert('Firebase Unavailable', 'Use the native dev build APK to use group features.');
       return;
     }
     setActionLoading(true);
@@ -376,12 +376,17 @@ const GroupTabInner = () => {
       const code = Math.random().toString(36).substring(2, 8).toUpperCase();
       const newRef = getRef('groups').push();
       const gid = newRef.key;
+      if (!gid) throw new Error('Could not generate group ID');
       await newRef.set({ info: { groupCode: code, createdAt: Date.now(), createdBy: userId }, members: {} });
       await AsyncStorage.setItem('groupId', gid);
       await AsyncStorage.setItem('groupCode', code);
       setGroupId(gid);
       setGroupCode(code);
-      setScreen('create_confirm');
+      Alert.alert(
+        '✅ Group Created!',
+        `Your group code is:\n\n${code}\n\nShare this code with your Dindi members so they can join.`,
+        [{ text: 'Go to Map →', onPress: () => setScreen('group_map') }]
+      );
     } catch (e: any) {
       Alert.alert('Error', `Could not create group: ${e?.message ?? e}`);
     } finally {
