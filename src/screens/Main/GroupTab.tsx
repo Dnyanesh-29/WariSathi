@@ -24,39 +24,40 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Buffer } from 'buffer';
 import { Text } from '../../components/CustomText';
 import { Colors } from '../../theme/colors';
 import { Typography } from '../../theme/typography';
 import MapLibreGL from '../../lib/maplibre';
 import { FIREBASE_DB_URL } from '../../config/firebaseConfig';
+import {
+  getDatabase,
+  ref,
+  push,
+  set,
+  query,
+  orderByChild,
+  equalTo,
+  get,
+  onValue,
+  remove,
+  update,
+  onDisconnect
+} from '@react-native-firebase/database';
 
-// ─── Firebase — LAZY initialization (runs on first use, not at module parse time) ────
-// Module-level init fails because native modules aren't ready when the JS bundle loads.
 let _db: any = null;
 
 const getDb = (): any => {
-  if (_db) return _db; // already initialized
+  if (_db) return _db;
   try {
-    require('@react-native-firebase/app'); // ensure app module is present
-    const mod = require('@react-native-firebase/database');
-    const fn  = mod.default ?? mod;
-    if (typeof fn !== 'function') {
-      console.warn('[GroupTab] database module is not a function, got:', typeof fn);
-      Alert.alert('Firebase Init Error', `module is not a function. Keys: ${Object.keys(mod).join(', ')}`);
-      return null;
-    }
-    _db = fn();
-    console.log('[GroupTab] Firebase DB initialized successfully (lazy)');
+    _db = getDatabase();
     return _db;
   } catch (e: any) {
-    console.warn('[GroupTab] Firebase lazy init failed:', e);
-    Alert.alert('Firebase Catch Error', e?.message ?? String(e));
+    console.warn('[GroupTab] Firebase init failed:', e);
     return null;
   }
 };
 
-// Helper: returns a database ref or null
-const getRef = (path: string) => getDb()?.ref(path) ?? null;
 
 // ─── Safe BLE import ───────────────────────────────────────────────────────────
 let BleManager: any = null;
@@ -198,7 +199,14 @@ const GroupTabInner = () => {
         }
         setUserId(uid);
 
-        const uname = await AsyncStorage.getItem('userName') ?? `Warkari_${uid.slice(-4)}`;
+        let uname = `Warkari_${uid.slice(-4)}`;
+        const profileStr = await AsyncStorage.getItem('userProfile');
+        if (profileStr) {
+          try {
+            const profile = JSON.parse(profileStr);
+            if (profile.fullName) uname = profile.fullName;
+          } catch (e) {}
+        }
         setUserName(uname);
 
         const gid = await AsyncStorage.getItem('groupId');
@@ -232,17 +240,19 @@ const GroupTabInner = () => {
 
   // ── Presence ──────────────────────────────────────────────────────────────────
   const setupPresence = async (gid: string, uid: string, uname: string) => {
+    const db = getDb();
     if (!db) return;
     try {
-      const mRef = getRef(`groups/${gid}/members/${uid}`);
+      const mRef = ref(db, `groups/${gid}/members/${uid}`);
       memberDbRef.current = mRef;
-      await mRef.set({ name: uname, isOnline: true, lat: 0, lng: 0, timestamp: Date.now() });
-      const disc = mRef.onDisconnect();
+      await set(mRef, { name: uname, isOnline: true, lat: 0, lng: 0, timestamp: Date.now() });
+      const disc = onDisconnect(mRef);
       await disc.update({ isOnline: false });
     } catch (e) {
       console.warn('[GroupTab] Presence error:', e);
     }
   };
+
 
   // ── Online GPS every 30s ──────────────────────────────────────────────────────
   const startOnlineGPS = (gid: string, uid: string) => {
@@ -259,12 +269,13 @@ const GroupTabInner = () => {
     })();
 
     // Send latest known location to Firebase every 30s
+    const db = getDb();
     if (!db) return;
     locationIntRef.current = setInterval(async () => {
       try {
         // We fetch a fresh high-accuracy position to send to the server
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-        await getRef(`groups/${gid}/members/${uid}`).update({
+        await update(ref(db, `groups/${gid}/members/${uid}`), {
           lat: loc.coords.latitude,
           lng: loc.coords.longitude,
           timestamp: Date.now(),
@@ -278,10 +289,10 @@ const GroupTabInner = () => {
 
   // ── Firebase member listener ───────────────────────────────────────────────────
   const startMemberListener = (gid: string, uid: string) => {
+    const db = getDb();
     if (!db) return;
-    const ref = getRef(`groups/${gid}/members`);
-    memberListenerRef.current = ref;
-    ref.on('value', (snap: any) => {
+    const mRef = ref(db, `groups/${gid}/members`);
+    memberListenerRef.current = onValue(mRef, (snap: any) => {
       try {
         const data = snap.val() ?? {};
         const members: GroupMember[] = Object.entries(data).map(([id, m]: any) => ({
@@ -308,8 +319,8 @@ const GroupTabInner = () => {
       } else {
         if (esp32Device) { try { await esp32Device.cancelConnection(); } catch {} setEsp32Device(null); }
         setMode('ONLINE');
-        if (db) {
-          try { await getRef(`groups/${gid}/members/${uid}`).update({ isOnline: true }); } catch {}
+        if (getDb()) {
+          try { await update(ref(getDb(), `groups/${gid}/members/${uid}`), { isOnline: true }); } catch {}
         }
       }
     });
@@ -363,35 +374,33 @@ const GroupTabInner = () => {
   const cleanupAll = useCallback(() => {
     if (locationWatchSub.current)  { locationWatchSub.current.remove(); locationWatchSub.current = null; }
     if (locationIntRef.current)    { clearInterval(locationIntRef.current); locationIntRef.current = null; }
-    if (memberListenerRef.current) { try { memberListenerRef.current.off(); } catch {} memberListenerRef.current = null; }
+    if (memberListenerRef.current) { try { memberListenerRef.current(); } catch {} memberListenerRef.current = null; }
     if (bleCleanupRef.current)     { bleCleanupRef.current(); bleCleanupRef.current = null; }
     if (esp32Device)               { try { esp32Device.cancelConnection(); } catch {} }
     if (netInfoUnsub.current)      { try { netInfoUnsub.current(); } catch {} netInfoUnsub.current = null; }
-    if (memberDbRef.current)       { try { memberDbRef.current.update({ isOnline: false }); } catch {} }
+    if (memberDbRef.current)       { try { update(memberDbRef.current, { isOnline: false }); } catch {} }
   }, [esp32Device]);
 
   // ── Actions ───────────────────────────────────────────────────────────────────
   const createGroup = async () => {
-    if (!getDb()) {
+    const db = getDb();
+    if (!db) {
       Alert.alert('Firebase Unavailable', 'Group features require a native build APK.');
       return;
     }
     setActionLoading(true);
     try {
       const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-      const newRef = getRef('groups').push();
+      const newRef = push(ref(db, 'groups'));
       const gid = newRef.key;
       if (!gid) throw new Error('Could not generate group ID');
-      await newRef.set({ info: { groupCode: code, createdAt: Date.now(), createdBy: userId }, members: {} });
+      await set(newRef, { info: { groupCode: code, createdAt: Date.now(), createdBy: userId }, members: {} });
       await AsyncStorage.setItem('groupId', gid);
       await AsyncStorage.setItem('groupCode', code);
       setGroupId(gid);
       setGroupCode(code);
-      Alert.alert(
-        '✅ Group Created!',
-        `Your group code is:\n\n${code}\n\nShare this code with your Dindi members so they can join.`,
-        [{ text: 'Go to Map →', onPress: () => setScreen('group_map') }]
-      );
+      setScreen('create_confirm');
+
     } catch (e: any) {
       Alert.alert('Error', `Could not create group: ${e?.message ?? e}`);
     } finally {
@@ -400,7 +409,8 @@ const GroupTabInner = () => {
   };
 
   const joinGroup = async () => {
-    if (!getDb()) {
+    const db = getDb();
+    if (!db) {
       Alert.alert('Firebase Unavailable', 'Group features require a native build APK.');
       return;
     }
@@ -408,8 +418,8 @@ const GroupTabInner = () => {
     if (!code) { Alert.alert('Error', 'Please enter a group code.'); return; }
     setActionLoading(true);
     try {
-      const q = getRef('groups').orderByChild('info/groupCode').equalTo(code);
-      const snap = await q.once('value');
+      const q = query(ref(db, 'groups'), orderByChild('info/groupCode'), equalTo(code));
+      const snap = await get(q);
       if (!snap.exists()) { Alert.alert('Not Found', 'No group found. Check the code and try again.'); return; }
       const gid = Object.keys(snap.val())[0];
       await AsyncStorage.setItem('groupId', gid);
@@ -429,8 +439,8 @@ const GroupTabInner = () => {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Leave', style: 'destructive', onPress: async () => {
         cleanupAll();
-        if (db) {
-          try { await getRef(`groups/${groupId}/members/${userId}`).remove(); } catch {}
+        if (getDb()) {
+          try { await remove(ref(getDb(), `groups/${groupId}/members/${userId}`)); } catch {}
         }
         await AsyncStorage.removeItem('groupId');
         await AsyncStorage.removeItem('groupCode');
@@ -453,10 +463,10 @@ const GroupTabInner = () => {
     const others = groupMembers.filter(m => m.userId !== userId && m.lat !== 0 && m.lng !== 0);
     return {
       type: 'FeatureCollection' as const,
-      features: others.map((m, i) => ({
+      features: others.map((m) => ({
         type: 'Feature' as const,
         geometry: { type: 'Point' as const, coordinates: [m.lng, m.lat] },
-        properties: { name: m.name, color: MEMBER_COLORS[i % MEMBER_COLORS.length], status: getMemberStatus(m.timestamp, m.isOnline) },
+        properties: { name: m.name, color: '#3498DB', status: getMemberStatus(m.timestamp, m.isOnline) },
       })),
     };
   }, [groupMembers, userId]);
@@ -608,6 +618,9 @@ const GroupTabInner = () => {
             style={{ circleRadius: 10, circleColor: Colors.primary, circleStrokeWidth: 3, circleStrokeColor: '#FFFFFF' }} />
           <MapLibreGL.Layer type="circle" id="userPulse"
             style={{ circleRadius: 20, circleColor: Colors.primary, circleOpacity: 0.25 }} />
+          <MapLibreGL.Layer type="symbol" id="user_label"
+            style={{ textField: 'You', textSize: 12, textColor: Colors.primary,
+              textHaloColor: '#FFFFFF', textHaloWidth: 1.5, textOffset: [0, 2.0], textAnchor: 'top' }} />
         </MapLibreGL.GeoJSONSource>
 
         {membersGeoJSON.features.length > 0 && (
@@ -712,7 +725,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 5,
   },
-  primaryButtonText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  primaryButtonText: { color: '#fff', fontSize: 18, fontFamily: 'Poppins_700Bold' },
   outlineButton: {
     width: '100%',
     height: 56,
@@ -723,7 +736,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.primary,
     marginBottom: 14,
   },
-  outlineButtonText: { color: Colors.primary, fontSize: 18, fontWeight: '700' },
+  outlineButtonText: { color: Colors.primary, fontSize: 18, fontFamily: 'Poppins_700Bold' },
 
   codeBox: {
     backgroundColor: Colors.surface,
@@ -735,7 +748,7 @@ const styles = StyleSheet.create({
   },
   codeText: {
     fontSize: 38,
-    fontWeight: '800',
+    fontFamily: 'Poppins_700Bold',
     color: Colors.primary,
     letterSpacing: 10,
     textAlign: 'center',
@@ -744,7 +757,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.1)',
     color: '#fff',
     fontSize: 28,
-    fontWeight: '700',
+    fontFamily: 'Poppins_700Bold',
     textAlign: 'center',
     letterSpacing: 8,
     borderRadius: 16,
