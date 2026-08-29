@@ -499,29 +499,18 @@ export const MapTab = () => {
               circleOpacity: 0,
             }}
           />
-          {/* Emoji label — replaces the old text label */}
-          <MapLibreGL.Layer
-            type="symbol"
-            id="eventEmoji"
-            style={{
-              textField: ['get', 'emoji'],
-              textSize: 16,
-              textAnchor: 'center',
-              textOffset: [0, 0],
-            }}
-          />
-          {/* Event name below the dot */}
+          {/* Event name label */}
           <MapLibreGL.Layer
             type="symbol"
             id="eventLabels"
             style={{
               textField: ['get', 'name'],
-              textSize: 10,
+              textSize: 11,
               textColor: Colors.textPrimary,
               textHaloColor: '#FFFFFF',
-              textHaloWidth: 1,
-              textOffset: [0, 2.4],
-              textAnchor: 'top',
+              textHaloWidth: 1.5,
+              textOffset: [0, 0],
+              textAnchor: 'center',
             }}
           />
         </MapLibreGL.GeoJSONSource>
