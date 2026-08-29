@@ -34,10 +34,16 @@ import { FIREBASE_DB_URL } from '../../config/firebaseConfig';
 let db: any = null; // firebase.database() instance
 
 try {
-  require('@react-native-firebase/app'); // ensure initialized
-  const firebaseDatabase = require('@react-native-firebase/database').default;
-  // Pass the DB URL from config so it targets the correct project
-  db = firebaseDatabase(undefined, FIREBASE_DB_URL);
+  require('@react-native-firebase/app'); // ensure app is initialized
+  // @react-native-firebase/database v26 exports the function directly (no .default)
+  const databaseModule = require('@react-native-firebase/database');
+  // Try both module formats: CJS default export and named export
+  const databaseFn = databaseModule.default ?? databaseModule;
+  // Call it — passing the DB URL ensures the right project is used
+  db = typeof databaseFn === 'function'
+    ? databaseFn(undefined, FIREBASE_DB_URL)
+    : databaseFn; // fallback: module itself might already be the db instance
+  console.log('[GroupTab] Firebase DB initialized:', !!db);
 } catch (e) {
   console.warn('[GroupTab] Firebase failed to load:', e);
 }
