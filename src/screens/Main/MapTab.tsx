@@ -511,6 +511,17 @@ export const MapTab = () => {
               circleOpacity: 0,
             }}
           />
+          {/* Event circle marker */}
+          <MapLibreGL.Layer
+            type="circle"
+            id="eventCircle"
+            style={{
+              circleRadius: 8,
+              circleColor: Colors.primary,
+              circleStrokeColor: '#FFFFFF',
+              circleStrokeWidth: 2,
+            }}
+          />
           {/* Event name label */}
           <MapLibreGL.Layer
             type="symbol"
@@ -521,8 +532,8 @@ export const MapTab = () => {
               textColor: Colors.textPrimary,
               textHaloColor: '#FFFFFF',
               textHaloWidth: 1.5,
-              textOffset: [0, 0],
-              textAnchor: 'center',
+              textOffset: [0, 1.2],
+              textAnchor: 'top',
             }}
           />
         </MapLibreGL.GeoJSONSource>

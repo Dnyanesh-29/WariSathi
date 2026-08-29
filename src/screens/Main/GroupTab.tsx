@@ -42,14 +42,17 @@ const getDb = (): any => {
     const fn  = mod.default ?? mod;
     if (typeof fn !== 'function') {
       console.warn('[GroupTab] database module is not a function, got:', typeof fn);
+      Alert.alert('Firebase Init Error', `module is not a function. Keys: ${Object.keys(mod).join(', ')}`);
       return null;
     }
     _db = fn();
     console.log('[GroupTab] Firebase DB initialized successfully (lazy)');
-  } catch (e) {
+    return _db;
+  } catch (e: any) {
     console.warn('[GroupTab] Firebase lazy init failed:', e);
+    Alert.alert('Firebase Catch Error', e?.message ?? String(e));
+    return null;
   }
-  return _db;
 };
 
 // Helper: returns a database ref or null
