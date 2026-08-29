@@ -191,6 +191,7 @@ export const MapTab = () => {
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
   const [showSchedule, setShowSchedule] = useState(false);
   const [selectedPOI, setSelectedPOI] = useState<{ name: string; type?: string; description?: string } | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<WariEvent | null>(null);
 
   // GPS from expo-location — not MapLibreGL.UserLocation
   const [userLat, setUserLat] = useState<number | null>(null);
@@ -302,9 +303,20 @@ export const MapTab = () => {
       zoom: 14,
       duration: 800,
     });
-    // Hide panels so map is visible
     bottomSheetRef.current?.snapToIndex(0);
     setShowSchedule(false);
+  }, []);
+
+  const flyToEvent = useCallback((ev: WariEvent) => {
+    cameraRef.current?.flyTo({
+      center: [ev.lng, ev.lat],
+      zoom: 14,
+      duration: 800,
+    });
+    bottomSheetRef.current?.snapToIndex(0);
+    setShowSchedule(false);
+    setSelectedPOI(null);
+    setSelectedEvent(ev);
   }, []);
 
   // ─── POI Press Handler ─────────────────────────────────────────────────────
@@ -634,6 +646,21 @@ export const MapTab = () => {
         </View>
       )}
 
+      {/* ─── Selected Event Callout ───────────────────────────────────────── */}
+      {selectedEvent && (
+        <View style={styles.callout}>
+          <View style={{ flex: 1 }}>
+            <Text style={[Typography.bodyLarge, { fontWeight: 'bold' }]}>{selectedEvent.name}</Text>
+            <Text style={[Typography.bodySmall, { color: Colors.primary, marginTop: 2 }]}>
+              {selectedEvent.description}
+            </Text>
+          </View>
+          <TouchableOpacity onPress={() => setSelectedEvent(null)}>
+            <Text style={{ color: Colors.textSecondary, fontSize: 18, paddingLeft: 12 }}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* ─── Bottom Sheet: Nearby POIs ────────────────────────────────────── */}
       {BottomSheet && BottomSheetScrollView ? (
         <BottomSheet
@@ -654,7 +681,7 @@ export const MapTab = () => {
                     <TouchableOpacity
                       key={ev.id}
                       style={styles.poiRow}
-                      onPress={() => flyTo(ev.lng, ev.lat)}
+                      onPress={() => flyToEvent(ev)}
                     >
                       <View style={{ flex: 1 }}>
                         <Text style={Typography.bodyLarge}>{ev.name}</Text>

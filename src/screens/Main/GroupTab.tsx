@@ -30,26 +30,30 @@ import { Typography } from '../../theme/typography';
 import MapLibreGL from '../../lib/maplibre';
 import { FIREBASE_DB_URL } from '../../config/firebaseConfig';
 
-// ─── Safe Firebase import (@react-native-firebase namespace API) ─────────────────
-let db: any = null; // firebase.database() instance
+// ─── Firebase — LAZY initialization (runs on first use, not at module parse time) ────
+// Module-level init fails because native modules aren't ready when the JS bundle loads.
+let _db: any = null;
 
-try {
-  require('@react-native-firebase/app'); // ensure app is initialized
-  // @react-native-firebase/database v26 — call with NO args.
-  // The DB URL comes from google-services.json, NOT from a code argument.
-  const databaseModule = require('@react-native-firebase/database');
-  const databaseFn = databaseModule.default ?? databaseModule;
-  if (typeof databaseFn !== 'function') throw new Error('database module is not a function');
-  db = databaseFn(); // ✅ correct for @react-native-firebase v26
-  console.log('[GroupTab] Firebase DB initialized successfully');
-} catch (e) {
-  console.warn('[GroupTab] Firebase failed to load:', e);
-}
+const getDb = (): any => {
+  if (_db) return _db; // already initialized
+  try {
+    require('@react-native-firebase/app'); // ensure app module is present
+    const mod = require('@react-native-firebase/database');
+    const fn  = mod.default ?? mod;
+    if (typeof fn !== 'function') {
+      console.warn('[GroupTab] database module is not a function, got:', typeof fn);
+      return null;
+    }
+    _db = fn();
+    console.log('[GroupTab] Firebase DB initialized successfully (lazy)');
+  } catch (e) {
+    console.warn('[GroupTab] Firebase lazy init failed:', e);
+  }
+  return _db;
+};
 
-// ─ Helpers that mirror the Firebase namespace API surface ────────────────
-// Instead of spreading 12 bound functions we call through db.ref() directly.
-// This avoids the "getDatabase is not a function" crash.
-const getRef = (path: string) => db?.ref(path) ?? null;
+// Helper: returns a database ref or null
+const getRef = (path: string) => getDb()?.ref(path) ?? null;
 
 // ─── Safe BLE import ───────────────────────────────────────────────────────────
 let BleManager: any = null;
@@ -365,8 +369,8 @@ const GroupTabInner = () => {
 
   // ── Actions ───────────────────────────────────────────────────────────────────
   const createGroup = async () => {
-    if (!db) {
-      Alert.alert('Firebase Unavailable', 'Use the native dev build APK to use group features.');
+    if (!getDb()) {
+      Alert.alert('Firebase Unavailable', 'Group features require a native build APK.');
       return;
     }
     setActionLoading(true);
@@ -393,8 +397,8 @@ const GroupTabInner = () => {
   };
 
   const joinGroup = async () => {
-    if (!db) {
-      Alert.alert('Error', 'Firebase unavailable. Use the native dev build APK.');
+    if (!getDb()) {
+      Alert.alert('Firebase Unavailable', 'Group features require a native build APK.');
       return;
     }
     const code = joinInput.trim().toUpperCase();
