@@ -13,8 +13,9 @@ import { Text } from '../../components/CustomText';
 import { Colors } from '../../theme/colors';
 import { Typography } from '../../theme/typography';
 import { POI_DATA } from '../../data/pois';
-import { WARI_SCHEDULE } from '../../data/schedule';
-
+import { WARI_SCHEDULE_EN, WARI_SCHEDULE_MR } from '../../data/schedule';
+import { Ionicons } from '@expo/vector-icons';
+import { ChatBotBottomSheet } from '../../components/ChatBotBottomSheet';
 // Safe import — MapLibreGL requires native build. Will be undefined in Expo Go.
 // setAccessToken(null) is called inside lib/maplibre.ts at module load.
 import MapLibreGL from '../../lib/maplibre';
@@ -152,6 +153,7 @@ export const MapTab = () => {
   const isMr = lang === 'mr';
   const FILTERS = isMr ? FILTERS_MR : FILTERS_EN;
   const events = EVENTS_DATA[isMr ? 'mr' : 'en'] ?? EVENTS_DATA.en;
+  const schedule = isMr ? WARI_SCHEDULE_MR : WARI_SCHEDULE_EN;
 
   // ─── Real road route via OSRM ────────────────────────────────────────────────
   const [routeGeoJSON, setRouteGeoJSON] = useState<any>(PALKHI_ROUTE_FALLBACK);
@@ -185,6 +187,7 @@ export const MapTab = () => {
 
   const cameraRef = useRef<any>(null);
   const bottomSheetRef = useRef<any>(null);
+  const chatBotSheetRef = useRef<any>(null);
   const snapPoints = useMemo(() => ['15%', '50%', '90%'], []);
 
   const [mapError, setMapError] = useState<string | null>(null);
@@ -619,14 +622,11 @@ export const MapTab = () => {
             </TouchableOpacity>
           </View>
           <ScrollView style={{ flex: 1 }}>
-            {WARI_SCHEDULE.map((s) => (
+            {schedule.map((s) => (
               <View key={s.id} style={styles.scheduleRow}>
                 <Text style={Typography.bodyMedium}>{s.village}</Text>
                 <Text style={Typography.bodySmall}>
-                  {isMr
-                    ? s.date.replace('Day', 'दिवस') + ' · ' + s.distanceFromStart
-                    : s.date + ' · ' + s.distanceFromStart
-                  }
+                  {s.date + ' · ' + s.distanceFromStart}
                 </Text>
               </View>
             ))}
@@ -752,6 +752,16 @@ export const MapTab = () => {
           </View>
         </BottomSheet>
       ) : null}
+
+      {/* Floating Action Button for ChatBot */}
+      <TouchableOpacity 
+        style={styles.chatFab}
+        onPress={() => chatBotSheetRef.current?.expand()}
+      >
+        <Ionicons name="sparkles" size={24} color="#fff" />
+      </TouchableOpacity>
+
+      <ChatBotBottomSheet bottomSheetRef={chatBotSheetRef} />
     </View>
   );
 };
@@ -902,6 +912,23 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
     marginLeft: 12,
+  },
+  chatFab: {
+    position: 'absolute',
+    right: 20,
+    bottom: 190,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 100,
+    zIndex: 100,
   },
 
   // Placeholder / error screen

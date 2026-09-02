@@ -17,14 +17,19 @@ import {
   ScrollView,
   Alert,
   TextInput,
-  Share,
-  Clipboard,
   ActivityIndicator,
+  Platform,
+  PermissionsAndroid,
+  Share,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Buffer } from 'buffer';
+import BottomSheet from '@gorhom/bottom-sheet';
+import { ChatBotBottomSheet } from '../../components/ChatBotBottomSheet';
 import { Text } from '../../components/CustomText';
 import { Colors } from '../../theme/colors';
 import { Typography } from '../../theme/typography';
@@ -173,9 +178,20 @@ const GroupTabInner = () => {
   const [screen, setScreen]               = useState<Screen>('lobby');
   const [joinInput, setJoinInput]         = useState('');
   const [actionLoading, setActionLoading] = useState(false);
+  const networkStateRef = useRef<boolean>(true);
+  const isGroupFullyOnlineRef = useRef<boolean>(true);
   const [groupMembers, setGroupMembers]   = useState<GroupMember[]>([]);
   const [mode, setMode]                   = useState<ConnectionMode>('ONLINE');
   const [esp32Device, setEsp32Device]     = useState<any>(null);
+
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
+  const [showDebug, setShowDebug] = useState(false);
+
+  const addLog = useCallback((message: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setDebugLogs(prev => [`[${timestamp}] ${message}`, ...prev].slice(0, 20));
+    console.log(message);
+  }, []);
 
   const cameraRef         = useRef<any>(null);
   const memberListenerRef = useRef<any>(null);
@@ -184,9 +200,13 @@ const GroupTabInner = () => {
   const memberDbRef       = useRef<any>(null);
   const netInfoUnsub      = useRef<any>(null);
   const locationWatchSub  = useRef<any>(null);
+  const isScanningRef     = useRef(false);
+  const userNameRef       = useRef(''); // always holds latest userName without stale closure
 
   const [myLat, setMyLat] = useState<number | null>(null);
   const [myLng, setMyLng] = useState<number | null>(null);
+
+  const bottomSheetRef = useRef<BottomSheet>(null);
 
   // ── Init ──────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -199,15 +219,18 @@ const GroupTabInner = () => {
         }
         setUserId(uid);
 
-        let uname = `Warkari_${uid.slice(-4)}`;
+        let uname = '';
         const profileStr = await AsyncStorage.getItem('userProfile');
         if (profileStr) {
           try {
             const profile = JSON.parse(profileStr);
-            if (profile.fullName) uname = profile.fullName;
+            if (profile.name) uname = profile.name;
+            else if (profile.fullName) uname = profile.fullName;
           } catch (e) {}
         }
+        if (!uname) uname = `Warkari_${uid.slice(-4)}`;
         setUserName(uname);
+        userNameRef.current = uname; // keep ref in sync
 
         const gid = await AsyncStorage.getItem('groupId');
         const gc  = await AsyncStorage.getItem('groupCode');
@@ -268,12 +291,12 @@ const GroupTabInner = () => {
       } catch (e) { console.warn('[GroupTab] GPS watch error:', e); }
     })();
 
-    // Send latest known location to Firebase every 30s
     const db = getDb();
     if (!db) return;
-    locationIntRef.current = setInterval(async () => {
+
+    // Send location immediately (don't wait 30s for first tick)
+    const sendLocation = async () => {
       try {
-        // We fetch a fresh high-accuracy position to send to the server
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
         await update(ref(db, `groups/${gid}/members/${uid}`), {
           lat: loc.coords.latitude,
@@ -281,10 +304,15 @@ const GroupTabInner = () => {
           timestamp: Date.now(),
           isOnline: true,
         });
-      } catch (e) {
+        addLog(`Location sent: ${loc.coords.latitude.toFixed(4)}, ${loc.coords.longitude.toFixed(4)}`);
+      } catch (e: any) {
         console.warn('[GroupTab] GPS send error:', e);
+        addLog('GPS send error: ' + e.message);
       }
-    }, 30000);
+    };
+
+    sendLocation(); // fire immediately
+    locationIntRef.current = setInterval(sendLocation, 30000); // then every 30s
   };
 
   // ── Firebase member listener ───────────────────────────────────────────────────
@@ -295,14 +323,35 @@ const GroupTabInner = () => {
     memberListenerRef.current = onValue(mRef, (snap: any) => {
       try {
         const data = snap.val() ?? {};
-        const members: GroupMember[] = Object.entries(data).map(([id, m]: any) => ({
+        const fbMembers: GroupMember[] = Object.entries(data).map(([id, m]: any) => ({
           userId: id, name: m.name ?? 'Warkari',
           isOnline: m.isOnline ?? false,
           lat: m.lat ?? 0, lng: m.lng ?? 0, timestamp: m.timestamp ?? 0,
         }));
-        setGroupMembers(members);
-        const anyOffline = members.some(m => m.userId !== uid && m.isOnline === false);
-        if (anyOffline) { setMode('BLUETOOTH'); scanForESP32(gid, uid); }
+        setGroupMembers((prev) => {
+          const updated = [...prev];
+          fbMembers.forEach((fbMem) => {
+            const idx = updated.findIndex((m) => m.userId === fbMem.userId);
+            if (idx >= 0) {
+              if (fbMem.timestamp > updated[idx].timestamp) {
+                updated[idx] = {
+                  ...updated[idx],
+                  lat: fbMem.lat,
+                  lng: fbMem.lng,
+                  timestamp: fbMem.timestamp,
+                  isOnline: fbMem.isOnline,
+                };
+              }
+            } else {
+              updated.push(fbMem);
+            }
+          });
+          return updated;
+        });
+        const anyOffline = fbMembers.some((m) => m.userId !== uid && m.isOnline === false);
+        isGroupFullyOnlineRef.current = !anyOffline;
+        // Start scanning if teammates are offline, but don't force UI mode to BLUETOOTH if we have WiFi
+        if (anyOffline) { scanForESP32(gid, uid); }
       } catch (e) {
         console.warn('[GroupTab] Member listener error:', e);
       }
@@ -313,11 +362,12 @@ const GroupTabInner = () => {
   const startNetInfoListener = (gid: string, uid: string) => {
     if (!NetInfo) return () => {};
     return NetInfo.addEventListener(async (state: any) => {
-      if (!state.isConnected) {
+      const hasInternet = !!state.isConnected;
+      networkStateRef.current = hasInternet;
+      if (!hasInternet) {
         setMode('BLUETOOTH');
         scanForESP32(gid, uid);
       } else {
-        if (esp32Device) { try { await esp32Device.cancelConnection(); } catch {} setEsp32Device(null); }
         setMode('ONLINE');
         if (getDb()) {
           try { await update(ref(getDb(), `groups/${gid}/members/${uid}`), { isOnline: true }); } catch {}
@@ -326,49 +376,156 @@ const GroupTabInner = () => {
     });
   };
 
-  // ── BLE scan & connect ────────────────────────────────────────────────────────
-  const scanForESP32 = useCallback((gid: string, uid: string) => {
-    if (!BleManager) return;
+  // ── BLE permissions ────────────────────────────────────────────────────────────
+  const requestBluetoothPermissions = async () => {
+    if (Platform.OS === 'android') {
+      const apiLevel = parseInt(Platform.Version.toString(), 10);
+      if (apiLevel >= 31) {
+        const result = await PermissionsAndroid.requestMultiple([
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        ]);
+        return result['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED &&
+               result['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED;
+      } else {
+        const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
+        return result === PermissionsAndroid.RESULTS.GRANTED;
+      }
+    }
+    return true;
+  };
+
+  // ── BLE scan + connect + sync (all-in-one, no circular deps) ──────────────────
+  const scanForESP32 = useCallback(async (gid: string, uid: string) => {
+    if (!BleManager || isScanningRef.current || esp32Device) return;
+    const hasPermission = await requestBluetoothPermissions();
+    if (!hasPermission) { addLog('BLE Permission Denied by User'); return; }
+
+    isScanningRef.current = true;
+    addLog('BLE scan started');
     try {
       BleManager.startDeviceScan(null, null, async (err: any, device: any) => {
-        if (err) { console.warn('[BLE] Scan error:', err); return; }
+        if (err) {
+          addLog('Scan error: ' + err.message);
+          isScanningRef.current = false;
+          return;
+        }
         if (device?.name === ESP32_NAME) {
           BleManager.stopDeviceScan();
+          isScanningRef.current = false;
+          addLog('Found WariSathi_Node — connecting...');
           try {
             const conn = await device.connect();
+            if (Platform.OS === 'android') {
+              try { await conn.requestMTU(512); } catch (e) { addLog('MTU error (ignored)'); }
+            }
             await conn.discoverAllServicesAndCharacteristics();
+            addLog('Connected to ESP32');
             setEsp32Device(conn);
             setMode('BLUETOOTH');
-            bleCleanupRef.current = startBluetoothSync(conn, gid, uid);
-          } catch (e) { console.warn('[BLE] Connect error:', e); }
+
+            const sendLocation = async () => {
+              try {
+                const { status } = await Location.requestForegroundPermissionsAsync();
+                if (status !== 'granted') { addLog('Location permission denied'); return; }
+                const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+                const payload = JSON.stringify({
+                  userId: uid,
+                  name: userNameRef.current,
+                  groupId: gid,
+                  lat: loc.coords.latitude,
+                  lng: loc.coords.longitude,
+                  timestamp: Date.now(),
+                });
+                addLog('BLE send: lat=' + loc.coords.latitude.toFixed(5));
+                await conn.writeCharacteristicWithResponseForService(
+                  BLE_SERVICE_UUID, BLE_CHAR_WRITE,
+                  Buffer.from(payload).toString('base64')
+                );
+                addLog('BLE location sent');
+              } catch (e: any) { addLog('BLE send error: ' + e.message); }
+            };
+
+            const readMembers = async () => {
+              try {
+                const char = await conn.readCharacteristicForService(BLE_SERVICE_UUID, BLE_CHAR_READ);
+                if (!char?.value) { addLog('BLE read: no data'); return; }
+                const decoded = Buffer.from(char.value, 'base64').toString('utf8');
+                addLog('BLE RX: ' + decoded.substring(0, 80));
+                const data = JSON.parse(decoded);
+                if (Array.isArray(data.members)) {
+                  setGroupMembers(prev => {
+                    const updated = [...prev];
+                    data.members.forEach((bleMem: any) => {
+                      const idx = updated.findIndex(m => m.userId === bleMem.userId);
+                      const isMe = bleMem.userId === uid;
+                      const parsedLat = Number(bleMem.lat) || 0;
+                      const parsedLng = Number(bleMem.lng) || 0;
+                      const parsedTime = Number(bleMem.timestamp) || Date.now();
+
+                      if (idx >= 0) {
+                        if (parsedTime > updated[idx].timestamp) {
+                           updated[idx] = {
+                             ...updated[idx],
+                             lat: parsedLat,
+                             lng: parsedLng,
+                             timestamp: parsedTime,
+                             // Keep Firebase online status, except if it's us and we know we're offline
+                             isOnline: (isMe && !networkStateRef.current) ? false : updated[idx].isOnline
+                           };
+                        }
+                      } else {
+                        updated.push({
+                          userId: bleMem.userId,
+                          name: bleMem.name || 'Warkari',
+                          isOnline: isMe ? !!networkStateRef.current : false,
+                          lat: parsedLat,
+                          lng: parsedLng,
+                          timestamp: parsedTime
+                        });
+                      }
+                    });
+                    return updated;
+                  });
+                  addLog('BLE members merged: ' + data.members.length);
+                }
+              } catch (e: any) { addLog('BLE read error: ' + e.message); }
+            };
+
+            sendLocation();
+            readMembers();
+            const sendInt = setInterval(sendLocation, 30000);
+            const readInt = setInterval(readMembers, 5000);
+
+            const disconnectSub = conn.onDisconnected(() => {
+              addLog('BLE dropped...');
+              clearInterval(sendInt);
+              clearInterval(readInt);
+              disconnectSub?.remove();
+              setEsp32Device(null);
+              isScanningRef.current = false;
+              
+              if (!networkStateRef.current || !isGroupFullyOnlineRef.current) {
+                addLog('Retrying scan in 3s...');
+                setTimeout(() => scanForESP32(gid, uid), 3000);
+              }
+            });
+
+            bleCleanupRef.current = () => {
+              clearInterval(sendInt);
+              clearInterval(readInt);
+              disconnectSub?.remove();
+            };
+          } catch (e: any) { addLog('Connect error: ' + e.message); isScanningRef.current = false; }
         }
       });
-    } catch (e) { console.warn('[BLE] Scan start error:', e); }
-  }, [userName]);
+    } catch (e: any) {
+      addLog('Scan start error: ' + e.message);
+      isScanningRef.current = false;
+    }
+  }, [addLog, esp32Device]);
 
-  const startBluetoothSync = (device: any, gid: string, uid: string): (() => void) => {
-    const sendInt = setInterval(async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') return;
-        const loc = await Location.getCurrentPositionAsync({});
-        const payload = JSON.stringify({ userId: uid, name: userName, groupId: gid,
-          lat: loc.coords.latitude, lng: loc.coords.longitude, timestamp: Date.now() });
-        await device.writeCharacteristicWithResponseForService(
-          BLE_SERVICE_UUID, BLE_CHAR_WRITE, Buffer.from(payload).toString('base64'));
-      } catch (e) { console.warn('[BLE] Send error:', e); }
-    }, 30000);
-
-    const readInt = setInterval(async () => {
-      try {
-        const char = await device.readCharacteristicForService(BLE_SERVICE_UUID, BLE_CHAR_READ);
-        const data = JSON.parse(Buffer.from(char.value, 'base64').toString('utf8'));
-        if (Array.isArray(data.members)) setGroupMembers(data.members);
-      } catch (e) { console.warn('[BLE] Read error:', e); }
-    }, 5000);
-
-    return () => { clearInterval(sendInt); clearInterval(readInt); };
-  };
 
   // ── Cleanup all ───────────────────────────────────────────────────────────────
   const cleanupAll = useCallback(() => {
@@ -454,19 +611,26 @@ const GroupTabInner = () => {
     catch (e) { console.warn('[GroupTab] Share error:', e); }
   };
 
-  const copyCode = () => {
-    if (groupCode) { Clipboard.setString(groupCode); Alert.alert('Copied!', `Code ${groupCode} copied.`); }
+  const copyCode = async () => {
+    if (groupCode) { await Clipboard.setStringAsync(groupCode); Alert.alert('Copied!', `Code ${groupCode} copied.`); }
   };
 
   // ── Derived map data ──────────────────────────────────────────────────────────
   const membersGeoJSON = useMemo(() => {
-    const others = groupMembers.filter(m => m.userId !== userId && m.lat !== 0 && m.lng !== 0);
+    // Include ALL other members, even those without GPS yet
+    const others = groupMembers.filter(m => m.userId !== userId);
+    // Only render on map those who have a real GPS fix
+    const withGps = others.filter(m => m.lat !== 0 || m.lng !== 0);
     return {
       type: 'FeatureCollection' as const,
-      features: others.map((m) => ({
+      features: withGps.map((m) => ({
         type: 'Feature' as const,
         geometry: { type: 'Point' as const, coordinates: [m.lng, m.lat] },
-        properties: { name: m.name, color: '#3498DB', status: getMemberStatus(m.timestamp, m.isOnline) },
+        properties: {
+          name: m.name && m.name.length > 0 ? m.name : 'Warkari',
+          color: '#3498DB',
+          status: getMemberStatus(m.timestamp, m.isOnline)
+        },
       })),
     };
   }, [groupMembers, userId]);
@@ -516,14 +680,17 @@ const GroupTabInner = () => {
   if (screen === 'join_input') {
     return (
       <View style={[styles.lobby, { paddingTop: insets.top + 24, alignItems: 'stretch' }]}>
-        <TouchableOpacity onPress={() => setScreen('lobby')} style={{ marginBottom: 24 }}>
-          <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16 }}>← Back</Text>
+        <TouchableOpacity onPress={() => setScreen('lobby')} style={{ marginBottom: 24, alignSelf: 'flex-start' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Ionicons name="arrow-back" size={20} color={Colors.textSecondary} />
+            <Text style={{ color: Colors.textSecondary, fontSize: 16, marginLeft: 4 }}>Back</Text>
+          </View>
         </TouchableOpacity>
-        <Text style={{ fontSize: 48, textAlign: 'center', marginBottom: 16 }}>🔑</Text>
-        <Text style={[Typography.headingLarge, { color: Colors.surface, textAlign: 'center', marginBottom: 8 }]}>
+        <Ionicons name="key" size={48} color={Colors.primary} style={{ alignSelf: 'center', marginBottom: 16 }} />
+        <Text style={[Typography.headingLarge, { color: Colors.textPrimary, textAlign: 'center', marginBottom: 8 }]}>
           Enter Group Code
         </Text>
-        <Text style={[Typography.bodyMedium, { color: 'rgba(255,255,255,0.6)', textAlign: 'center', marginBottom: 28 }]}>
+        <Text style={[Typography.bodyMedium, { color: Colors.textSecondary, textAlign: 'center', marginBottom: 28 }]}>
           Ask your group leader for the 6-letter code
         </Text>
         <TextInput
@@ -531,7 +698,7 @@ const GroupTabInner = () => {
           value={joinInput}
           onChangeText={t => setJoinInput(t.toUpperCase())}
           placeholder="e.g. WARI99"
-          placeholderTextColor="rgba(255,255,255,0.3)"
+          placeholderTextColor={Colors.textSecondary}
           autoCapitalize="characters"
           maxLength={8}
         />
@@ -546,23 +713,26 @@ const GroupTabInner = () => {
   if (screen === 'create_confirm') {
     return (
       <View style={[styles.lobby, { paddingTop: insets.top + 40 }]}>
-        <Text style={{ fontSize: 56, textAlign: 'center', marginBottom: 16 }}>✅</Text>
-        <Text style={[Typography.headingLarge, { color: Colors.surface, textAlign: 'center', marginBottom: 8 }]}>
+        <Ionicons name="checkmark-circle" size={64} color={Colors.success} style={{ alignSelf: 'center', marginBottom: 16 }} />
+        <Text style={[Typography.headingLarge, { color: Colors.textPrimary, textAlign: 'center', marginBottom: 8 }]}>
           Group Created!
         </Text>
-        <Text style={[Typography.bodyMedium, { color: 'rgba(255,255,255,0.65)', textAlign: 'center', marginBottom: 32 }]}>
+        <Text style={[Typography.bodyMedium, { color: Colors.textSecondary, textAlign: 'center', marginBottom: 32 }]}>
           Share this code with your Dindi members:
         </Text>
         <View style={styles.codeBox}>
           <Text style={styles.codeText}>{groupCode}</Text>
+          <TouchableOpacity onPress={copyCode} style={{ padding: 4 }}>
+            <Ionicons name="copy-outline" size={20} color={Colors.primary} />
+          </TouchableOpacity>
         </View>
         <View style={{ flexDirection: 'row', gap: 16, marginTop: 24, marginBottom: 36 }}>
           <TouchableOpacity style={styles.iconBtn} onPress={copyCode}>
-            <Text style={{ fontSize: 24 }}>📋</Text>
+            <Ionicons name="copy" size={24} color={Colors.primary} />
             <Text style={{ color: Colors.primary, fontWeight: '600', fontSize: 13, marginTop: 6 }}>Copy</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.iconBtn} onPress={shareCode}>
-            <Text style={{ fontSize: 24 }}>📤</Text>
+            <Ionicons name="share-social" size={24} color={Colors.primary} />
             <Text style={{ color: Colors.primary, fontWeight: '600', fontSize: 13, marginTop: 6 }}>Share</Text>
           </TouchableOpacity>
         </View>
@@ -595,6 +765,9 @@ const GroupTabInner = () => {
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
           <Text style={[styles.statusText, { color: Colors.textSecondary, fontSize: 12 }]}>Code: {groupCode}</Text>
+          <TouchableOpacity style={{ padding: 4, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: 4 }} onPress={() => setShowDebug(!showDebug)}>
+            <Text style={{ fontSize: 10, fontFamily: 'monospace' }}>DBUG</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.leaveBtn} onPress={leaveGroup}>
             <Text style={{ color: Colors.danger, fontSize: 12, fontWeight: '700' }}>Leave</Text>
           </TouchableOpacity>
@@ -645,6 +818,36 @@ const GroupTabInner = () => {
         )}
       </MapLibreGL.Map>
 
+      {/* Debug Panel */}
+      {showDebug && (
+        <ScrollView
+          style={{
+            position: 'absolute',
+            bottom: 100,
+            left: 0,
+            right: 0,
+            height: 150,
+            backgroundColor: 'rgba(0,0,0,0.85)',
+            padding: 8,
+            zIndex: 999
+          }}
+        >
+          {debugLogs.map((log, i) => (
+            <Text key={i} style={{ color: '#00FF00', fontSize: 10, fontFamily: 'monospace' }}>
+              {log}
+            </Text>
+          ))}
+        </ScrollView>
+      )}
+
+      {/* Floating Action Button for ChatBot */}
+      <TouchableOpacity 
+        style={styles.chatFab}
+        onPress={() => bottomSheetRef.current?.expand()}
+      >
+        <Ionicons name="sparkles" size={24} color="#fff" />
+      </TouchableOpacity>
+
       {/* Bottom member strip */}
       <View style={styles.memberStrip}>
         {groupMembers.filter(m => m.userId !== userId).length === 0 ? (
@@ -678,6 +881,8 @@ const GroupTabInner = () => {
           </ScrollView>
         )}
       </View>
+      
+      <ChatBotBottomSheet bottomSheetRef={bottomSheetRef} />
     </View>
   );
 };
@@ -709,7 +914,7 @@ const styles = StyleSheet.create({
   container:  { flex: 1, backgroundColor: Colors.background },
   center:     { flex: 1, backgroundColor: Colors.background, justifyContent: 'center', alignItems: 'center', padding: 32 },
 
-  lobby: { flex: 1, backgroundColor: Colors.navy, alignItems: 'center', paddingHorizontal: 28 },
+  lobby: { flex: 1, backgroundColor: Colors.background, alignItems: 'center', paddingHorizontal: 28 },
 
   primaryButton: {
     backgroundColor: Colors.primary,
@@ -754,8 +959,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   codeInput: {
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    color: '#fff',
+    backgroundColor: '#fff',
+    color: Colors.textPrimary,
     fontSize: 28,
     fontFamily: 'Poppins_700Bold',
     textAlign: 'center',
@@ -768,7 +973,7 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   iconBtn: {
-    backgroundColor: Colors.surface,
+    backgroundColor: '#fff',
     borderRadius: 14,
     padding: 18,
     alignItems: 'center',
@@ -825,4 +1030,21 @@ const styles = StyleSheet.create({
   memberDot:  { width: 32, height: 32, borderRadius: 16, borderWidth: 3 },
   memberName: { color: Colors.textPrimary, fontWeight: '700', fontSize: 13, marginBottom: 2 },
   memberTime: { fontSize: 11, fontWeight: '600' },
+  chatFab: {
+    position: 'absolute',
+    right: 20,
+    bottom: 190,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 100,
+    zIndex: 100,
+  }
 });
